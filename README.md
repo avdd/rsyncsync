@@ -1,20 +1,27 @@
 rsyncsync
 =========
 
-Dr-pb-x-alike using only rsync and an SSH server (and some basic POSIX
-tools.)
+**Note**: this is a proof of concept.
 
-Synchronise multiple locations, with backups, using only rsync.
+Synchronise multiple locations, 2-way, with backups, using only rsync
+and basic POSIX tools.
 
-Attempts to ensure that data are never overwritten and always backed up.
-Can use multiple backup locations and sync multiple working directories.
+**Note**: this assumes a mostly single-user scenario, where files will
+generally only be modified in one place at a time.  There is no fancy
+merging, only backing up of files that *might* have changed, to save
+your bacon if you lose synchronisation for a time.
 
-Backups are kept on the server using rsnapshot-style hard links.
-Potential conflicts are detected locally and files copied to a separate
-directory.
+This attempts to ensure that data are never overwritten and always
+backed up.  Can use multiple backup locations and sync multiple working
+directories.  (Seems to work well in my testing but no theoretical proof
+for N:M consistency, YMMV, etc.)
 
-Soon: adding support for encrypted remotes using encfs, and partial
-backups for high-frequency sync of file sub-sets.
+Backups are kept using rsnapshot-style hard links.  Potential conflicts
+are detected locally and files copied to a separate local directory, and
+then backed up to the remote.
+
+Soon: support for encrypted remotes using encfs, and partial backups for
+high-frequency sync of file sub-sets.
 
 
 ## usage
@@ -22,17 +29,21 @@ backups for high-frequency sync of file sub-sets.
 For each source and backup you want, do:
 
 ```bash
-rsyncsync SOURCE [HOST:]PATH
+rsyncsync SOURCE-DIR [HOST:]BACKUP-PATH
 ```
+
+Synchronisation occurs in a direction based on whether the local files
+have changed relative to the previous invocation, using only the local
+clock and an opaque stamp signalling that the remote has changed and
+needs pulling.
 
 
 
 ## requirements
 
-(Haven't checked minimum versions)
+### backup requirements
 
-
-### backup (server) requirements
+backup can be local or remote
 
 * ssh-server (if remote)
 * rsync
@@ -41,13 +52,13 @@ rsyncsync SOURCE [HOST:]PATH
 * filesystem with hard link support, e.g. ext2
 
 
-## client requirements
+### client requirements
 
+* bash
 * rsync
 * coreutils
 * findutils
-* ssh (for remote backups)
-
+* ssh for remote backup, public-key auth recommended
 
 
 
