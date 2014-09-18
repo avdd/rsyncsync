@@ -108,7 +108,7 @@ check_environ() {
         SSH=$(command -v ssh)
         [[ "$SSH" ]]  || fatal "ssh not found"
         local opts="-o ControlMaster=auto -o ControlPersist=15m"
-        SSH="$SSH -S $RUNDIR/socket $opts"
+        SSH="$SSH -S $RUNDIR/$BACKUPHOST-socket $opts"
         mkdir -p $RUNDIR
     fi
 }
