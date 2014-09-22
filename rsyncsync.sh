@@ -1,85 +1,69 @@
 #!/bin/bash
 
-set -eu
-set -o pipefail
-
-shopt -s nullglob dotglob
-
 SCRIPT="$0"
-NAME="$(basename $0 .sh)"
-DOTNAME=.$NAME
-DATE_FORMAT="%Y%m%d_%H%M%S"
 DEBUG=${DEBUG:-}
+ID_BASE=id
+LOCK_BASE=lock
+STATE_BASE=state
+INDEX_BASE=remotes
+LATEST_BASE=latest
+NAME="$(basename $0 .sh)"
+DOT_NAME=.$NAME
+CONFLICT_BASE="_${NAME}_conflicts"
+DATE_FORMAT="${DATE_FORMAT:-%Y%m%d_%H%M%S.%N}"
 
-
-usage() {
-    { 
-        echo Usage:
-        echo "$SCRIPT SOURCE-DIR [HOST:]BACKUP-PATH"
-    } >&2
+init() {
+    set -eu
+    #set -Eeu
+    #set -o pipefail
+    #trap 'error $?' ERR
+    #trap '' PIPE
+    shopt -s nullglob dotglob
+    run "$@"
+    exit 0
 }
 
-main() {
-    trap 'error $?' ERR
+usage() {
+    echo Usage:
+    echo "$SCRIPT SOURCE-DIR [HOST:]BACKUP-PATH"
+}
 
-    get_args "$@"
+run() {
+
+    get_args "$@" || exit 1
     check_environ
 
-    DOTDIR="$SOURCEDIR/$DOTNAME"
-
-    LATEST="$BACKUPROOT/latest"
-    LOCK="$BACKUPROOT/lock"
-    REMOTE_STATEFILE="$BACKUPROOT/state"
-    REMOTE_IDFILE="$BACKUPROOT/id"
-    CONFLICT_BASE="_${NAME}_conflicts"
-    LOCAL_INDEX="$DOTDIR/remotes"
+    DOT="$SOURCEDIR/$DOT_NAME"
+    LOCAL_INDEX="$DOT/$INDEX_BASE"
+    REMOTE_LOCK="$BACKUPROOT/$LOCK_BASE"
+    REMOTE_IDFILE="$BACKUPROOT/$ID_BASE"
+    REMOTE_LATEST="$BACKUPROOT/$LATEST_BASE"
+    REMOTE_STATEFILE="$BACKUPROOT/$STATE_BASE"
 
     connect
+    get_remote_id
+    get_remote_state
+    get_local_state
+    compare_state
+    init_dot
 
-    REMOTE_ID=$(get_remote_id)
-    LOCAL_STATEFILE="$DOTDIR/state-$REMOTE_ID"
-    REMOTE_STATE=$(get_remote_state)
-    local local_state=$(get_local_state)
-
-    if [[ "$REMOTE_STATE" = "" ]]
-    then
-        # init remote, force push
-        local_state=
-        LOCAL_CHANGED=1
-
-    elif [[ "$local_state" = "" ]]
-    then
-        # have remote state, not local
-        if [[ -d "$SOURCEDIR" ]]
-        then
-            fatal "Directory '$SOURCEDIR' exists, aborting"
-        fi
-        LOCAL_CHANGED=
-
-    else
-        LOCAL_CHANGED=$(has_local_changes)
+    if test "$REMOTE_CHANGED"
+    then do_pull
     fi
 
-    mkdir -p "$DOTDIR"
-
-    if [[ "$REMOTE_STATE" != "$local_state" ]]
-    then
-        do_pull
-
-    elif [[ "$LOCAL_CHANGED" ]]
-    then
-        do_push
-    
-    else
-        debug "nothing to do"
+    if test "$LOCAL_CHANGED"
+    then do_push
     fi
 
+    if ! test "$REMOTE_CHANGED" && ! test "$LOCAL_CHANGED"
+    then debug 'Nothing to do'
+    fi
 }
 
 get_args() {
-    if [[ $# -lt 2 ]]
+    if test $# -lt 2
     then
-        usage && exit 1
+        usage; return 1
     fi
 
     SOURCEDIR=$(readlink -f "$1")
@@ -87,26 +71,26 @@ get_args() {
     BACKUPROOT=${DESTSPEC#*:}
     BACKUPHOST=""
 
-    if [[ "${DESTSPEC##*:*}" = "" ]]
+    if test -z "${DESTSPEC##*:*}"
     then
         BACKUPROOT=${BACKUPROOT:-.}
         BACKUPHOST=${DESTSPEC%%:*}
-        [[ "$BACKUPHOST" ]] || { usage && exit 1; }
+        test "$BACKUPHOST" || { usage; return 1; }
     fi
 }
 
 check_environ() {
     RSYNC=$(command -v rsync)
-    [[ "$RSYNC" ]]  || fatal "rsync not found"
+    test "$RSYNC" || fatal "rsync not found"
 
     XDG=${XDG_RUNTIME_DIR:-/tmp}
     RUNDIR=$XDG/$NAME
     SSH=
 
-    if [[ "$BACKUPHOST" ]]
+    if test "$BACKUPHOST"
     then
         SSH=$(command -v ssh)
-        [[ "$SSH" ]]  || fatal "ssh not found"
+        test "$SSH" || fatal "ssh not found"
         local opts="-o ControlMaster=auto -o ControlPersist=15m"
         SSH="$SSH -S $RUNDIR/$BACKUPHOST-socket $opts"
         mkdir -p $RUNDIR
@@ -114,136 +98,169 @@ check_environ() {
 }
 
 connect() {
-    if [[ "$BACKUPHOST" ]]
+    if test "$BACKUPHOST"
     then
         $SSH -fN $BACKUPHOST || fatal "unable to contact '$BACKUPHOST'"
     fi
 }
 
 get_remote_id() {
-    local file="$REMOTE_IDFILE"
     local id=$(echo "$DESTSPEC" | md5)
     local create="mkdir -p $BACKUPROOT"
-    remote_sh "$create && test -f '$file' && cat $file || echo $id | tee $file"
+    local exists="test -f '$REMOTE_IDFILE'"
+    local getid="cat $REMOTE_IDFILE || echo $id | tee $REMOTE_IDFILE"
+    REMOTE_ID=$(remote_sh "$create && $exists && $getid")
+    LOCAL_STATEFILE="$DOT/$STATE_BASE-$REMOTE_ID"
 }
 
 get_remote_state() {
-    local file="$REMOTE_STATEFILE"
-    remote_sh "test -f '$file' && cat $file || true"
+    local script="test -f '$REMOTE_STATEFILE' && cat $REMOTE_STATEFILE"
+    REMOTE_STATE=$(remote_sh "$script" || true)
 }
 
 get_local_state() {
-    if [[ -f "$LOCAL_STATEFILE" ]]
+    LOCAL_STATE=$(cat "$LOCAL_STATEFILE" 2>/dev/null || true)
+}
+
+get_local_changed() {
+    LOCAL_CHANGED=$(find "$SOURCEDIR" -newer "$LOCAL_STATEFILE" \
+                    | grep -v /\\$DOT_NAME | head -1)
+}
+
+init_dot() {
+    mkdir -p "$DOT"
+    test -r "$LOCAL_INDEX" || touch "$LOCAL_INDEX"
+    if ! grep -q "$REMOTE_ID" "$LOCAL_INDEX"
     then
-        cat "$LOCAL_STATEFILE"
+        echo "$REMOTE_ID" "$DESTSPEC" >> "$LOCAL_INDEX"
     fi
 }
 
-has_local_changes() {
-    if [[ ! -f "$LOCAL_STATEFILE" ]]
+compare_state() {
+    if test -z "$REMOTE_STATE"
     then
-        echo 1
-        return
+        # init remote and force push
+        LOCAL_STATE=
+        LOCAL_CHANGED=1
+
+    elif test -z "$LOCAL_STATE"
+    then
+        # have remote state, not local
+        # abort if source is not empty
+        if test -d "$SOURCEDIR" -a "$(echo $SOURCEDIR/*)"
+        then
+            #fatal "Directory '$SOURCEDIR' not empty, aborting"
+            fatal "'$SOURCEDIR' exists and is not empty, aborting"
+        fi
+        LOCAL_CHANGED=
+
+    elif test ! -f "$LOCAL_STATEFILE"
+    then
+        LOCAL_CHANGED=1
+
+    else
+        get_local_changed
     fi
-    new=$(find "$SOURCEDIR" -newer "$LOCAL_STATEFILE" \
-            | grep -v /\\$DOTNAME | head -1)
-    if [[ "$new" ]]
+
+    REMOTE_CHANGED=
+    if test "$LOCAL_STATE" != "$REMOTE_STATE"
     then
-        echo 1
+        REMOTE_CHANGED=1
     fi
 }
 
 do_pull() {
     debug pulling
 
-    local dst="$SOURCEDIR"
-    local src="$LATEST"
+    local src="$REMOTE_LATEST"
 
-    if [[ "$BACKUPHOST" ]]
+    if test "$BACKUPHOST"
     then
         src="$BACKUPHOST:$src"
     fi
 
-    if [[ "$LOCAL_CHANGED" ]]
+    if test "$LOCAL_CHANGED"
     then
-        local date=$(date_stamp)
-        local tmp=$(mktemp -d --tmpdir=$DOTDIR)
-
-        do_rsync --delete --backup --backup-dir="$tmp" "$src/" "$dst"
-        if [[ "$(find_conflicts "$tmp" | head -1)" ]]
-        then
-            warn_conflicts "$date" "$tmp"
-            local conflict_path="$SOURCEDIR/$CONFLICT_BASE"
-            mkdir -p "$conflict_path"
-            mv "$tmp" "$conflict_path/$date"
-            do_push
-            return
-        else
-            rmdir "$tmp"
-            debug "no conflicts"
-        fi
+        pull_dirty "$src"
     else
-        do_rsync --delete "$src/" "$dst"
-        debug "clean pull"
+        pull_clean "$src"
     fi
     record_state "$REMOTE_STATE"
 }
 
+pull_clean() {
+    local dst="$SOURCEDIR"
+    do_rsync -v --delete "$src/" "$dst"
+    debug "clean pull"
+}
+
+pull_dirty() {
+    local date=$(date_stamp)
+    local tmp=$(mktemp -d --tmpdir=$DOT)
+    local dst="$SOURCEDIR"
+
+    do_rsync --delete --backup --backup-dir="$tmp" "$src/" "$dst"
+    if test "$(find_conflicts "$tmp" | head -1)"
+    then
+        warn_conflicts "$date" "$tmp"
+        local conflict_path="$SOURCEDIR/$CONFLICT_BASE"
+        mkdir -p "$conflict_path"
+        mv "$tmp" "$conflict_path/$date"
+    else
+        rmdir "$tmp"
+        debug "no conflicts"
+        LOCAL_CHANGED=
+    fi
+}
+
 do_push() {
     debug "pushing to remote"
-    local new=$(date_stamp)
-    pre_push "$new" || fatal "pre-push failed"
-    rsync_push "$new"
-    post_push "$new"
+    local new_stamp=$(date_stamp)
+    pre_push || fatal "pre-push failed"
+    rsync_push
+    post_push
 }
 
 pre_push() {
-    local new="$1"
-    local lock="ln -s $new $LOCK"
-    local touch="mkdir $BACKUPROOT/$new"
-    local test="test -L '$LATEST' && echo 1 || true"
-    HAS_LATEST=$(remote_sh "$touch && $lock && $test")
+    local touch="mkdir $BACKUPROOT/$new_stamp"
+    local lock="ln -s $new_stamp $REMOTE_LOCK"
+    local test="test -L '$REMOTE_LATEST'"
+    HAS_LATEST=$(remote_sh "$touch && $lock && $test" \
+                    && echo 1 || true)
 }
 
 rsync_push() {
-    local new="$1"
-    local dst="$BACKUPROOT/$new"
-    if [[ "$BACKUPHOST" ]]
+    local dst="$BACKUPROOT/$new_stamp"
+    if test "$BACKUPHOST"
     then
         dst="$BACKUPHOST:$dst"
     fi
     local link=
-    if [[ "$HAS_LATEST" = "" ]]
+    if test -z "$HAS_LATEST"
     then
         stderr "init remote '$BACKUPROOT'"
     else
-        link=--link-dest=../latest
+        link=--link-dest=../$LATEST_BASE
     fi
     do_rsync $link "$SOURCEDIR/" "$dst"
 
 }
 
 post_push() {
-    local new="$1"
     local state=$(new_state)
-    local relink="rm -f $LATEST && ln -s $new $LATEST"
-    local unlock="rm $LOCK"
+    local relink="rm -f $REMOTE_LATEST && ln -s $new_stamp $REMOTE_LATEST"
+    local unlock="rm $REMOTE_LOCK"
     local record="echo '$state' > $REMOTE_STATEFILE"
     remote_sh "$relink && $unlock && $record"
     record_state "$state"
 }
 
 record_state() {
-    touch "$LOCAL_INDEX"
-    if ! grep -q "$REMOTE_ID" "$LOCAL_INDEX"
-    then
-        echo "$REMOTE_ID" "$DESTSPEC" >> "$LOCAL_INDEX"
-    fi
     echo "$1" > "$LOCAL_STATEFILE"
 }
 
 remote_sh() {
-    if [[ "$BACKUPHOST" ]]
+    if test "$BACKUPHOST"
     then
         $SSH $BACKUPHOST "$@"
     else
@@ -252,11 +269,11 @@ remote_sh() {
 }
 
 do_rsync() {
-    if [[ "$BACKUPHOST" ]]
+    if test "$BACKUPHOST"
     then
-        $RSYNC -e "$SSH" -a --exclude /$DOTNAME "$@"
+        $RSYNC -e "$SSH" -a --exclude /$DOT_NAME "$@"
     else
-        $RSYNC -a --exclude /$DOTNAME "$@"
+        $RSYNC -a --exclude /$DOT_NAME "$@"
     fi
 }
 
@@ -276,9 +293,8 @@ warn_conflicts() {
         echo
         echo "(maybe) changed local files replaced by remote"
         echo
+        echo $CONFLICT_BASE/$date
         find_conflicts "$path" | sed "s/^$name\//  /" | sort
-        echo
-        echo backups in $CONFLICT_BASE/$date
         echo
     } >&2
 }
@@ -313,7 +329,7 @@ stderr() {
 }
 
 debug() {
-    [[ "$DEBUG" ]] && stderr "$@" || true
+    test "$DEBUG" && stderr "$@" || true
 }
 
 fatal() {
@@ -321,7 +337,8 @@ fatal() {
     exit 1
 }
 
-
-main "$@"
-exit 0
+if test "$0" = "${BASH_SOURCE}"
+then
+    init "$@"
+fi
 
