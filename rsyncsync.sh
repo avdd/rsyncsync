@@ -157,7 +157,7 @@ tmp_crypt_name() {
         :> "$DOT/$name"
     fi
     local crypt=$(get_crypt_name "$DOT/$name")
-    # keep for later
+    # keep for later; bug in encfs ?
     if test "$name" != "$LATEST_BASE"
     then
         rm -f "$DOT/$name"
@@ -244,8 +244,6 @@ pull_dirty() {
         tmp_crypt="$(get_crypt_name "$tmp")"
         rsync_backup="$CRYPT/$dot_crypt/$tmp_crypt"
     fi
-
-    #local pull_dst="$SOURCEDIR"
 
     do_rsync $rsync_pull_opts   \
         --delete --backup       \
@@ -352,7 +350,6 @@ do_rsync() {
     then
         local exclude="$(get_crypt_name "$DOT")"
     fi
-    #echo $RSYNC -a --exclude "/$exclude" "$@"
     if test "$BACKUPHOST"
     then
         $RSYNC -e "$SSH" -a --exclude "/$exclude" "$@"
