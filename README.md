@@ -4,7 +4,8 @@ rsyncsync
 **Note**: this is a proof of concept.
 
 Synchronise multiple locations, 2-way, with backups, using only rsync
-and basic POSIX tools.
+and basic POSIX tools.  Optionally encrypt remotes using encfs
+(encryption performed locally before sending to remote.)
 
 **Note**: this assumes a mostly single-user scenario, where files will
 generally only be modified in one place at a time.  There is no fancy
@@ -20,8 +21,6 @@ Backups are kept using rsnapshot-style hard links.  Potential conflicts
 are detected locally and files copied to a separate local directory, and
 then backed up to the remote.
 
-Soon: support for encrypted remotes using encfs, and partial backups for
-high-frequency sync of file sub-sets.
 
 
 ## behaviour
