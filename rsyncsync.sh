@@ -6,10 +6,9 @@ LOCK_BASE=lock
 STATE_BASE=state
 INDEX_BASE=remotes
 LATEST_BASE=latest
-LATEST_CRYPT=
 
-SCRIPT="$BASH_SOURCE"
-NAME="$(basename $SCRIPT .sh)"
+SCRIPT=$BASH_SOURCE
+NAME=$(basename "$SCRIPT" .sh)
 DOT_NAME=.$NAME
 CONFLICT_BASE="_${NAME}_conflicts"
 DATE_FORMAT="${DATE_FORMAT:-%Y%m%d_%H%M%S.%N}"
@@ -35,11 +34,11 @@ run() {
     get_args "$@" || exit 1
     check_environ
 
-    DOT="$SOURCEDIR/$DOT_NAME"
-    REMOTE_INDEX="$DOT/$INDEX_BASE"
-    REMOTE_LOCK="$BACKUPROOT/$LOCK_BASE"
-    REMOTE_IDFILE="$BACKUPROOT/$ID_BASE"
-    REMOTE_STATEFILE="$BACKUPROOT/$STATE_BASE"
+    DOT=$SOURCEDIR/$DOT_NAME
+    REMOTE_INDEX=$DOT/$INDEX_BASE
+    REMOTE_LOCK=$BACKUPROOT/$LOCK_BASE
+    REMOTE_IDFILE=$BACKUPROOT/$ID_BASE
+    REMOTE_STATEFILE=$BACKUPROOT/$STATE_BASE
 
     connect
     get_remote_id
@@ -72,17 +71,17 @@ get_args() {
 
     if test $# -eq 3
     then
-        CRYPT="$2"
+        CRYPT=$2
         if ! has_crypt
         then
             usage
-            echo directory "$CRYPT" does not exist
+            echo "directory '$CRYPT' does not exist"
             return 1
         fi
         shift
     fi
 
-    DESTSPEC="$2"
+    DESTSPEC=$2
     BACKUPROOT=${DESTSPEC#*:}
     BACKUPHOST=""
 
@@ -95,7 +94,7 @@ get_args() {
 }
 
 check_environ() {
-    RSYNC=$(command -v rsync)
+    RSYNC=$(command -v rsync || true)
     test "$RSYNC" || fatal "rsync not found"
 
     if test "$BACKUPHOST"
@@ -118,7 +117,7 @@ get_remote_id() {
     local getid="cat -- '$REMOTE_IDFILE'"
     local putid="echo '$id' | tee -- '$REMOTE_IDFILE'"
     REMOTE_ID=$(remote_sh "$create && $exists && $getid || $putid")
-    LOCAL_STATEFILE="$DOT/${STATE_BASE}-$REMOTE_ID"
+    LOCAL_STATEFILE=$DOT/$STATE_BASE-$REMOTE_ID
 }
 
 get_remote_state() {
@@ -132,7 +131,7 @@ get_local_state() {
 
 get_local_changed() {
     LOCAL_CHANGED=$(find "$SOURCEDIR" -newer "$LOCAL_STATEFILE"  |
-                        grep -v /\\$DOT_NAME | head -1)
+                        grep -v "/\\$DOT_NAME" | head -1)
 }
 
 init_dot() {
@@ -146,12 +145,12 @@ init_dot() {
 
 get_crypt_name() {
     local inode=$(stat -c%i "$1")
-    local crypt="$(find $CRYPT -maxdepth 3 -inum $inode)"
+    local crypt=$(find "$CRYPT" -maxdepth 3 -inum $inode)
     test "$crypt" && basename "$crypt"
 }
 
 tmp_crypt_name() {
-    local name="$1"
+    local name=$1
     if ! test -f "$name"
     then
         :> "$DOT/$name"
@@ -176,9 +175,8 @@ compare_state() {
     then
         # have remote state, not local
         # abort if source is not empty
-        if test -d "$SOURCEDIR" -a "$(echo $SOURCEDIR/*)"
+        if test -d "$SOURCEDIR" -a "$(echo "$SOURCEDIR"/*)"
         then
-            #fatal "Directory '$SOURCEDIR' not empty, aborting"
             fatal "'$SOURCEDIR' exists and is not empty, aborting"
         fi
         LOCAL_CHANGED=
@@ -199,26 +197,32 @@ compare_state() {
 }
 
 do_pull() {
-    debug pulling
+    debug "pulling from '$DESTSPEC'"
 
-    local pull_src="$LATEST_BASE"
-    local pull_dst="$SOURCEDIR"
-    local rsync_pull_opts=
+    local pull_src=$LATEST_BASE
+    local pull_dst=$SOURCEDIR
+    local exclude=$DOT_NAME
+    local pull_opts=
 
     if has_crypt
     then
-        LATEST_CRYPT="$(tmp_crypt_name "$LATEST_BASE")"
-        pull_src="$LATEST_CRYPT"
-        pull_dst="$CRYPT"
-        rsync_pull_opts=--inplace
+        pull_src=$(tmp_crypt_name "$LATEST_BASE")
+        pull_dst=$CRYPT
+        exclude=$(get_crypt_name "$DOT")
+        # NB. --inplace creates a risk that an aborted transfer
+        # can corrupt a local file.  not sure what to do about this
+        # except always back everything up locally, which is yuck
+        pull_opts=--inplace
     fi
 
-    pull_src="$BACKUPROOT/$pull_src"
+    pull_src=$BACKUPROOT/$pull_src
 
     if test "$BACKUPHOST"
     then
-        pull_src="$BACKUPHOST:$pull_src"
+        pull_src=$BACKUPHOST:$pull_src
     fi
+
+    local rsync_pull_opts="$pull_opts --exclude /$exclude"
 
     if test "$LOCAL_CHANGED"
     then
@@ -235,14 +239,14 @@ pull_clean() {
 }
 
 pull_dirty() {
-    local tmp=$(mktemp -d --tmpdir=$DOT)
-    local rsync_backup="$tmp"
+    local tmp=$(mktemp -d --tmpdir="$DOT")
+    local rsync_backup=$tmp
 
     if has_crypt
     then
         dot_crypt=$(get_crypt_name "$DOT")
-        tmp_crypt="$(get_crypt_name "$tmp")"
-        rsync_backup="$CRYPT/$dot_crypt/$tmp_crypt"
+        tmp_crypt=$(get_crypt_name "$tmp")
+        rsync_backup=$CRYPT/$dot_crypt/$tmp_crypt
     fi
 
     do_rsync $rsync_pull_opts   \
@@ -254,7 +258,7 @@ pull_dirty() {
     then
         local date=$(date_stamp)
         warn_conflicts "$date" "$tmp"
-        local conflict_path="$SOURCEDIR/$CONFLICT_BASE"
+        local conflict_path=$SOURCEDIR/$CONFLICT_BASE
         mkdir -p "$conflict_path"
         mv "$tmp" "$conflict_path/$date"
     else
@@ -266,25 +270,23 @@ pull_dirty() {
 }
 
 do_push() {
-    debug "pushing to remote $DESTSPEC"
-    local new_stamp=$(date_stamp)
-    REMOTE_BACKUP_BASE=$new_stamp
-
-    local push_src="$SOURCEDIR"
-    local push_latest="$LATEST_BASE"
+    debug "pushing to '$DESTSPEC'"
+    local backup_base=$(date_stamp)
+    local push_src=$SOURCEDIR
+    local push_latest=$LATEST_BASE
     if has_crypt
     then
-        push_src="$CRYPT"
+        push_src=$CRYPT
         push_latest=
-        push_latest="$(tmp_crypt_name "$LATEST_BASE")"
-        REMOTE_BACKUP_BASE="$(tmp_crypt_name "$new_stamp")"
+        push_latest=$(tmp_crypt_name "$LATEST_BASE")
+        backup_base=$(tmp_crypt_name "$backup_base")
         test "$push_latest"
     fi
 
-    local push_dst="$BACKUPROOT/$REMOTE_BACKUP_BASE"
+    local push_dst=$BACKUPROOT/$backup_base
     if test "$BACKUPHOST"
     then
-        push_dst="$BACKUPHOST:$push_dst"
+        push_dst=$BACKUPHOST:$push_dst
     fi
     pre_push || fatal "pre-push failed"
     rsync_push
@@ -292,18 +294,18 @@ do_push() {
 }
 
 pre_push() {
-    local touch="mkdir -- '$BACKUPROOT/$REMOTE_BACKUP_BASE'"
-    local lock="ln -s -- '$REMOTE_BACKUP_BASE' '$REMOTE_LOCK'"
+    local touch="mkdir -- '$BACKUPROOT/$backup_base'"
+    local lock="ln -s -- '$backup_base' '$REMOTE_LOCK'"
     local test="test -L '$BACKUPROOT/$push_latest'"
     HAS_LATEST=$(remote_sh "$touch && $lock && $test" \
                     && echo 1 || true)
 }
 
 rsync_push() {
-    local dst="$BACKUPROOT/$REMOTE_BACKUP_BASE"
+    local dst=$BACKUPROOT/$backup_base
     if test "$BACKUPHOST"
     then
-        dst="$BACKUPHOST:$dst"
+        dst=$BACKUPHOST:$dst
     fi
     local link=
     if test -z "$HAS_LATEST"
@@ -319,7 +321,7 @@ rsync_push() {
 post_push() {
     local state=$(new_state)
     local rmlink="rm -f -- '$BACKUPROOT/$push_latest'"
-    local relink="ln -s -- '$REMOTE_BACKUP_BASE' '$BACKUPROOT/$push_latest'"
+    local relink="ln -s -- '$backup_base' '$BACKUPROOT/$push_latest'"
     local unlock="rm -- '$REMOTE_LOCK'"
     local record="echo '$state' > '$REMOTE_STATEFILE'"
     remote_sh "$rmlink && $relink && $unlock && $record"
@@ -335,7 +337,6 @@ record_state() {
 }
 
 remote_sh() {
-    #echo REMOTE: "$@" >&2
     if test "$BACKUPHOST"
     then
         $SSH $BACKUPHOST "$@"
@@ -345,28 +346,24 @@ remote_sh() {
 }
 
 do_rsync() {
-    local exclude="$DOT_NAME"
-    if has_crypt
-    then
-        local exclude="$(get_crypt_name "$DOT")"
-    fi
+    #echo $RSYNC -a "$@"
     if test "$BACKUPHOST"
     then
-        $RSYNC -e "$SSH" -a --exclude "/$exclude" "$@"
+        $RSYNC -e "$SSH" -a "$@"
     else
-        $RSYNC -a --exclude "/$exclude" "$@"
+        $RSYNC -a "$@"
     fi
 }
 
 find_conflicts() {
-    local path="$1"
+    local path=$1
     local name=$(basename "$path")
-    (cd "$path/.." && find $name ! -path $name)
+    (cd "$path/.." && find "$name" ! -path "$name")
 }
 
 warn_conflicts() {
-    local date="$1"
-    local path="$2"
+    local date=$1
+    local path=$2
     local name=$(basename "$path")
     {
         echo
@@ -374,7 +371,7 @@ warn_conflicts() {
         echo
         echo "(maybe) changed local files replaced by remote"
         echo
-        echo $CONFLICT_BASE/$date
+        echo "$CONFLICT_BASE/$date"
         find_conflicts "$path" | sed "s/^$name\//  /" | sort
         echo
     } >&2
