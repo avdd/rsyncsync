@@ -1,12 +1,16 @@
 #!/bin/bash
 
 
-HERE=$(dirname "$BASH_SOURCE")
-NAME=rsyncsync
+SELF=$BASH_SOURCE
+HERE=$(dirname "$SELF")
+NAME=$(basename "$SELF" .test.sh)
+SCRIPT=$(readlink -f $HERE/$NAME.sh)
+
+source "$SCRIPT"
+
 DOT=.$NAME
-CONFLICTS=_${NAME}_conflicts
-R=$(readlink -f $HERE/$NAME.sh)
-STAT_FORMAT='%A %U %G %y %n'
+CONFLICTS=$CONFLICT_BASE
+
 STAT_FORMAT='%A %U %G %Y %n'
 
 HELLO=$(date)
@@ -278,7 +282,7 @@ local_conflicts_propagate() {
 
 
 sync() {
-    $R "$@"
+    $SCRIPT "$@"
 }
 
 
