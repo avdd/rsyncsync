@@ -6,6 +6,8 @@ NAME=rsyncsync
 DOT=.$NAME
 CONFLICTS=_${NAME}_conflicts
 R=$(readlink -f $HERE/$NAME.sh)
+STAT_FORMAT='%A %U %G %y %n'
+STAT_FORMAT='%A %U %G %Y %n'
 
 HELLO=$(date)
 
@@ -27,24 +29,10 @@ access_given_state() {
     test "$(cd "$GIVEN" && ls)" = "$(cd "$THIS" && ls)"
 }
 
-treestat_works() {
-    mkdir test
-    echo "$HELLO" > test/file
-    # rather loose assertion
-    _treestat test | grep -q file
-}
-
-treehash_works() {
-    mkdir test
-    hash=$(echo "$HELLO" | md5sum | cut -c1-32)
-    echo "$HELLO" > test/file
-    _treehash test | grep -q "$hash.*/file"
-}
-
-difftree_works() {
+difftree_works_self() {
     # compare tree to self returns true
-    given treehash_works
-    date > date-file
+    given access_given_state
+    _random > date-file
     difftree "$THIS" "$THIS"
 }
 
@@ -53,16 +41,15 @@ dir_empty() {
     test -z "$(shopt -s nullglob dotglob;  echo *)"
 }
 
-difftree_works_with_empty_dir() {
+difftree_works_empty() {
     given dir_empty
     difftree "$GIVEN" "$THIS"
 }
 
-difftree_works_different_number_parent_links() {
-    given difftree_works_with_empty_dir
-    mkdir -p x/1 x/2 x/3
-    rsync -aH "$GIVEN/" x/1
-    difftree "$GIVEN" x/1
+difftree_works() {
+    given difftree_works_self
+    date > date-file
+    ! difftree "$GIVEN" "$THIS"
 }
 
 given_states_identical() {
@@ -93,7 +80,7 @@ local_1() {
     mkdir -p local1/{a,b,c}/{1,2,3}
     for d in `find local1 -type d`
     do
-        echo "$RANDOM $d" > $d/stuff
+        _random > $d/stuff
     done
 }
 
@@ -181,7 +168,7 @@ local_tracked_remote_untracked() {
     sync local1 backup1
     test -L backup1/latest
     test -f backup1/state
-    diffhash local1 backup1/latest
+    difftree local1 backup1/latest
 }
 
 local_empty_remote_tracked() {
@@ -212,12 +199,11 @@ local_unchanged_remote_unchanged() {
 
 _modify() {
     arg="$1"
+    sleep 1
     for f in `find "$arg"/* -type f`
     do
         echo "modifying $f"
-        sleep 0.5
-        date +%s.%N >> "$f"
-        return
+        _random >> "$f"
     done
 }
 
@@ -226,8 +212,8 @@ local_changed_remote_unchanged() {
     _modify local1
     previous=$(readlink -f backup1/latest)
     sync local1 backup1
-    diffhash local1 backup1/latest
-    diffhash "$GIVEN"/local1 "$previous"
+    difftree local1 backup1/latest
+    difftree "$GIVEN"/local1 "$previous"
 }
 
 local_2() {
@@ -239,13 +225,13 @@ local_2() {
 local_2_modified() {
     given local_2
     _modify local2
-    ! diffhash $GIVEN/local2 local2
+    ! difftree $GIVEN/local2 local2
 }
 
 remote_changed() {
     given local_2_modified
     sync local2 backup1
-    diffhash local2 backup1/latest
+    difftree local2 backup1/latest
 }
 
 local_unchanged_remote_changed() {
@@ -264,8 +250,7 @@ local_no_conflicts() {
 
 local_changed_concurrently() {
     given remote_changed
-    mark=$(date +%s.%N)
-    echo "$mark" > local1/stuff
+    _random > local1/stuff
 }
 
 local_preserves_conflicting_changes() {
@@ -284,7 +269,7 @@ local_preserves_conflicting_changes() {
 
 local_conflicts_propagate() {
     given local_preserves_conflicting_changes
-    diffhash local1 backup1/latest
+    difftree local1 backup1/latest
     sync local2 backup1
     difftree local1 local2
 }
@@ -297,14 +282,24 @@ sync() {
 }
 
 
+_random() {
+    echo $(date +%s.%N) $RANDOM
+}
+
 _treestat() {
-    (cd "$1" && find -print0 | xargs -r0 ls -ld) \
-        | grep -v /\\$DOT | grep -v \\.$
+    (cd "$1" &&
+        find -print0 |
+        sort -z      |
+        xargs -r0 stat -c "$STAT_FORMAT"
+    ) | grep -v /\\$DOT
 }
 
 _treehash() {
-    (cd "$1" && find -type f -print0 | sort -z | xargs -r0 md5sum) \
-        | grep -v /\\$DOT
+    (cd "$1"
+        find -type f -print0 |
+        sort -z              |
+        xargs -r0 md5sum
+    ) | grep -v /\\$DOT
 }
 
 diffstat() {
