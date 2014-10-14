@@ -35,11 +35,13 @@ run() {
     check_environ
 
     DOT=$SOURCEDIR/$DOT_NAME
+    LOCAL_LOCK=$DOT/$LOCK_BASE
     REMOTE_INDEX=$DOT/$INDEX_BASE
     REMOTE_LOCK=$BACKUPROOT/$LOCK_BASE
     REMOTE_IDFILE=$BACKUPROOT/$ID_BASE
     REMOTE_STATEFILE=$BACKUPROOT/$STATE_BASE
 
+    test "${TEST:-}" || lock_local
     connect
     get_remote_id
     get_remote_state
@@ -100,13 +102,28 @@ check_environ() {
     if test "$BACKUPHOST"
     then
         test "${SSH:-}" || SSH=$(command -v ssh || true)
+        test "$SSH" || fatal "ssh not found"
     fi
+}
+
+has_crypt() {
+    # TODO: more robust check?
+    test "$CRYPT" && test -d "$CRYPT"
+}
+
+lock_local() {
+    test -d "$DOT" || return 0
+    exec 200>$LOCAL_LOCK
+    flock -n 200 || fatal "failed obtaining lock"
 }
 
 connect() {
     if test "$BACKUPHOST"
     then
-        $SSH -fN $BACKUPHOST || fatal "unable to contact '$BACKUPHOST'"
+        # assumes ControlMaster for performance
+        local opt='-o PreferredAuthentications=publickey'
+        $SSH $opt $BACKUPHOST true 2>/dev/null ||
+            fatal "unable to contact '$BACKUPHOST'"
     fi
 }
 
@@ -294,11 +311,10 @@ do_push() {
 }
 
 pre_push() {
-    local touch="mkdir -- '$BACKUPROOT/$backup_base'"
-    local lock="ln -s -- '$backup_base' '$REMOTE_LOCK'"
-    local test="test -L '$BACKUPROOT/$push_latest'"
-    HAS_LATEST=$(remote_sh "$touch && $lock && $test" \
-                    && echo 1 || true)
+    local mkdir="mkdir -- '$BACKUPROOT/$backup_base'"
+    local lock="mkdir -- '$REMOTE_LOCK'"
+    local test="{ test -L '$BACKUPROOT/$push_latest' && echo 1 || true; }"
+    HAS_LATEST=$(remote_sh "$mkdir && $test && $lock")
 }
 
 rsync_push() {
@@ -322,14 +338,10 @@ post_push() {
     local state=$(new_state)
     local rmlink="rm -f -- '$BACKUPROOT/$push_latest'"
     local relink="ln -s -- '$backup_base' '$BACKUPROOT/$push_latest'"
-    local unlock="rm -- '$REMOTE_LOCK'"
+    local unlock="rmdir -- '$REMOTE_LOCK'"
     local record="echo '$state' > '$REMOTE_STATEFILE'"
     remote_sh "$rmlink && $relink && $unlock && $record"
     record_state "$state"
-}
-
-has_crypt() {
-    test "$CRYPT" && test -d "$CRYPT"
 }
 
 record_state() {
@@ -337,6 +349,7 @@ record_state() {
 }
 
 remote_sh() {
+    #debug remote_sh "$@"
     if test "$BACKUPHOST"
     then
         $SSH $BACKUPHOST "$@"
@@ -346,7 +359,7 @@ remote_sh() {
 }
 
 do_rsync() {
-    #echo $RSYNC -a "$@"
+    #debug "$RSYNC -a" "$@"
     if test "$BACKUPHOST"
     then
         $RSYNC -e "$SSH" -a "$@"
