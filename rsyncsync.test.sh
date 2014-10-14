@@ -282,7 +282,7 @@ local_conflicts_propagate() {
 
 
 sync() {
-    $SCRIPT "$@"
+    TEST=1 $SCRIPT "$@"
 }
 
 
