@@ -173,7 +173,7 @@ tmp_crypt_name() {
         :> "$DOT/$name"
     fi
     local crypt=$(get_crypt_name "$DOT/$name")
-    # keep for later; bug in encfs ?
+    # keep 'latest' for reuse in later step; timing bug in encfs ?
     if test "$name" != "$LATEST_BASE"
     then
         rm -f "$DOT/$name"
@@ -219,17 +219,18 @@ do_pull() {
     local pull_src=$LATEST_BASE
     local pull_dst=$SOURCEDIR
     local exclude=$DOT_NAME
-    local pull_opts=
+    local pull_opts=() pull_tmp=
 
     if has_crypt
     then
         pull_src=$(tmp_crypt_name "$LATEST_BASE")
         pull_dst=$CRYPT
         exclude=$(get_crypt_name "$DOT")
-        # NB. --inplace creates a risk that an aborted transfer
-        # can corrupt a local file.  not sure what to do about this
-        # except always back everything up locally, which is yuck
-        pull_opts=--inplace
+        # use temp-dir outside encfs mount because encfs disallows writing
+        # arbitrary files to an encfs reverse mount
+        pull_tmp=$(mktemp -d --tmpdir="$DOT" crypt-XXXXXXXX)
+        mkdir -p "$pull_tmp"
+        pull_opts=(--temp-dir "$pull_tmp")
     fi
 
     pull_src=$BACKUPROOT/$pull_src
@@ -239,47 +240,64 @@ do_pull() {
         pull_src=$BACKUPHOST:$pull_src
     fi
 
-    local rsync_pull_opts="$pull_opts --exclude /$exclude"
+    pull_opts+=(--exclude "/$exclude")
 
     if test "$LOCAL_CHANGED"
     then
-        pull_dirty "$pull_src"
+        pull_dirty
     else
-        pull_clean "$pull_dst" "$pull_src"
+        pull_clean
     fi
+    test "$pull_tmp" && rm -rf "$pull_tmp"
     record_state "$REMOTE_STATE"
 }
 
 pull_clean() {
-    do_rsync $rsync_pull_opts --delete "$pull_src/" "$pull_dst"
+    do_rsync "${pull_opts[@]}" --delete "$pull_src/" "$pull_dst"
     debug "clean pull"
 }
 
 pull_dirty() {
-    local tmp=$(mktemp -d --tmpdir="$DOT")
-    local rsync_backup=$tmp
+    local conflict_tmp=$(mktemp -d --tmpdir="$DOT" conflict-XXXXXXXX)
+    local rsync_backup=$conflict_tmp
 
     if has_crypt
     then
         dot_crypt=$(get_crypt_name "$DOT")
-        tmp_crypt=$(get_crypt_name "$tmp")
+        tmp_crypt=$(get_crypt_name "$conflict_tmp")
         rsync_backup=$CRYPT/$dot_crypt/$tmp_crypt
     fi
 
-    do_rsync $rsync_pull_opts   \
+    # optimisation option: assume older files have not been updated and
+    # overwrite with newer versions. this avoids backing up such old files
+    # that have changed remotely
+    if test "${RSYNCSYNC_MERGE_DISCARD_OLD:-}"
+    then
+        do_rsync "${pull_opts[@]}"  \
+            --update                \
+            "$pull_src/" "$pull_dst"
+    fi
+
+    # now back up local changes;
+    # files deleted locally will reappear from remote
+    do_rsync "${pull_opts[@]}"  \
         --delete --backup       \
-        --backup-dir="$rsync_backup" \
+        --backup-dir "$rsync_backup" \
         "$pull_src/" "$pull_dst"
 
-    if test "$(find_conflicts "$tmp" | head -1)"
+    # rsync sometimes places empty dirs in the backup;
+    # remove them so we only have the salient conflict files
+    find "$rsync_backup" -depth -type d -delete \
+        2>/dev/null || true
+
+    if test -d "$conflict_tmp"
     then
         local date=$(date_stamp)
-        warn_conflicts "$date" "$tmp"
+        warn_conflicts "$date" "$conflict_tmp"
         local conflict_path=$SOURCEDIR/$CONFLICT_BASE
         mkdir -p "$conflict_path"
-        mv "$tmp" "$conflict_path/$date"
+        mv "$conflict_tmp" "$conflict_path/$date"
     else
-        rmdir "$tmp"
         debug "no conflicts"
         # signal nothing to push
         LOCAL_CHANGED=
