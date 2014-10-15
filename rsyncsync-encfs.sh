@@ -74,6 +74,10 @@ cmd_config_history() {
     mount_history_from_config "$@"
 }
 
+cmd_config_repeat() {
+    repeat_targets_from_config "$@"
+}
+
 cmd_config_verify() {
     verify_from_config "$@"
 }
@@ -384,6 +388,86 @@ ensure_dir() {
         echo "$dir"
         return 0
     fi
+}
+
+repeat_targets_from_config() {
+    local id="${1:-}" var=
+    test "$id" || fatal "missing ID arg"
+    local delay=${2:-1}
+
+    var=BACKUP_SOURCE_$id
+    local source=${!var:-}
+    test "$source" || fatal "$var unset"
+
+    local lock=$source/.rsyncsync/lock.schedule
+    if [ -r $lock ]
+    then
+        echo locked
+        exit 1
+    fi
+
+    # necessary?
+    #exec 200>$lock
+    #flock -n 200 || fatal "failed obtaining lock"
+
+    unschedule
+
+    local status=$source/.rsyncsync/status
+    export RSYNCSYNC_WRITE_STATUS=$status
+    try_targets_from_config $id
+
+    if [ "$(cat $status)" = 'no change' ]
+    then
+        ((delay *= 2))
+        ((delay > 60 )) && delay=60 || true
+    else
+        delay=1
+    fi
+    reschedule
+    rm -f $lock
+}
+
+unschedule() {
+    local job
+    for job in $(atq | grep -v = | cut -f1)
+    do
+        if at -c $job | tail -1 | grep -q "$SELF.config-repeat.$id"
+        then
+            echo unschedule job $job
+            atrm $job
+        fi
+    done
+}
+
+reschedule() {
+    local out= rc=
+    local cmd="$SELF config-repeat $id $delay"
+    out=$(echo -n "$cmd" | at "now + $delay min" 2>&1)
+    rc=$?
+    if (( $rc != 0 ))
+    then
+        echo "$out" >&2
+        return $rc
+    fi
+    return 0
+}
+
+get_args() {
+    i=1
+    local _names=()
+    while [ "$1" != '--' ]
+    do
+        _names+=($1)
+        shift
+    done
+    shift
+    local _name
+    for _name in ${_names[@]}
+    do
+        eval "$_name=\${1:-}"
+        test "${!_name}" || fatal "missing arg ${_name^^}"
+        shift
+    done
 }
 
 tmpdir() {
