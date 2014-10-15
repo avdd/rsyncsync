@@ -31,7 +31,7 @@ usage() {
 
 run() {
 
-    get_args "$@" || exit 1
+    get_args "$@" || fatal 'usage'
     check_environ
 
     DOT=$SOURCEDIR/$DOT_NAME
@@ -49,17 +49,23 @@ run() {
     compare_state
     init_dot
 
+    RESULT=
+
     if test "$REMOTE_CHANGED"
     then do_pull
     fi
 
+    # pull can detect a spurious local change
+    # and disable subsequent push
     if test "$LOCAL_CHANGED"
     then do_push
     fi
 
     if ! test "$REMOTE_CHANGED" && ! test "$LOCAL_CHANGED"
-    then debug 'Nothing to do'
+    then : ${RESULT:='no change'}
     fi
+
+    result "${RESULT:-'unknown error'}"
 }
 
 get_args() {
@@ -254,7 +260,7 @@ do_pull() {
 
 pull_clean() {
     do_rsync "${pull_opts[@]}" --delete "$pull_src/" "$pull_dst"
-    debug "clean pull"
+    RESULT='clean pull'
 }
 
 pull_dirty() {
@@ -287,7 +293,7 @@ pull_dirty() {
 
     # rsync sometimes places empty dirs in the backup;
     # remove them so we only have the salient conflict files
-    find "$rsync_backup" -depth -type d -delete \
+    find "$conflict_tmp" -depth -type d -delete \
         2>/dev/null || true
 
     if test -d "$conflict_tmp"
@@ -297,10 +303,14 @@ pull_dirty() {
         local conflict_path=$SOURCEDIR/$CONFLICT_BASE
         mkdir -p "$conflict_path"
         mv "$conflict_tmp" "$conflict_path/$date"
+        RESULT="conflicts in $conflict_path/$date"
+    elif test "${RSYNCSYNC_MERGE_DISCARD_OLD:-}"
+    then
+        RESULT='merge'
     else
-        debug "no conflicts"
         # signal nothing to push
         LOCAL_CHANGED=
+        RESULT='clean merge'
     fi
 }
 
@@ -326,6 +336,7 @@ do_push() {
     pre_push || fatal "pre-push failed"
     rsync_push
     post_push
+    test "$RESULT" || RESULT="push to $DESTSPEC"
 }
 
 pre_push() {
@@ -420,7 +431,20 @@ md5() {
     md5sum | cut -c1-32
 }
 
-error() {
+result() {
+    debug "$@"
+    local f=${RSYNCSYNC_WRITE_STATUS:-}
+    if test "$f"
+    then
+        echo "$@" > "$f"
+    fi
+}
+
+debug() {
+    test "$DEBUG" && stderr "$@" || true
+}
+
+__unused__error() {
     trap - ERR
     let i=0 status=$1
     {
@@ -437,12 +461,9 @@ stderr() {
     echo "$@" >&2
 }
 
-debug() {
-    test "$DEBUG" && stderr "$@" || true
-}
-
 fatal() {
-    stderr "$@"
+    stderr "${1:-unknown}"
+    result "ERROR: ${1:-unknown}"
     exit 1
 }
 
