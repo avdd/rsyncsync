@@ -395,6 +395,16 @@ repeat_targets_from_config() {
     test "$id" || fatal "missing ID arg"
     local delay=${2:-1}
 
+#    if ((delay > 1))
+#    then
+#        # random jitter so multiple 'at's don't hit the
+#        # server at the same minute
+#        case $(date +%S) in
+#            00|01|02)
+#            sleep $(($RANDOM * 2 / 4321 + 1));;
+#        esac
+#    fi
+
     var=BACKUP_SOURCE_$id
     local source=${!var:-}
     test "$source" || fatal "$var unset"
