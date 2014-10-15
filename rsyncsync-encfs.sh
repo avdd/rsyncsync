@@ -187,7 +187,10 @@ purge_history_from_config() {
     local encfs sshfs s
     s=$(mount_history_from_config "$id" "$num")
     eval "$s"
-    local target="${BACKUP_TARGETS[num]}/$id"
+    local var=BACKUP_TARGET_$id
+    local target=${!var:-}
+    test "$target" || fatal "$var unset"
+    local target="${BACKUP_TARGETS[num]}/$target"
     local keep=${BACKUP_KEEP:-100}
     purge_history
     sleep 1
