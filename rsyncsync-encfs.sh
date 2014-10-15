@@ -12,23 +12,24 @@ init() {
     set -eu
     shopt -s nullglob dotglob
     init_commands
-    test "${1:-}" && dispatch "$@"
-    test $? -eq 0 && exit 0
-    usage
-    exit 1
+    dispatch "$@"
 }
 
 dispatch() {
     check_environ
-    cmd=${1//-/_}
-    shift
-    case "$COMMAND_FUNCS" in
-        *cmd_"$cmd"*)
-            cmd_$cmd "$@"
-            return 0
-            ;;
-    esac
-    return 1
+    if (($#))
+    then
+        cmd=${1//-/_}
+        shift
+        case "$COMMAND_FUNCS" in
+            *cmd_"$cmd"*)
+                cmd_$cmd "$@"
+                return 0
+                ;;
+        esac
+    fi
+    usage
+    exit 1
 }
 
 init_commands() {
@@ -37,9 +38,9 @@ init_commands() {
 
 check_environ() {
     set +u
-    test "$SSH"   || SSH=$(type -p ssh || true)
-    test "$SSHFS" || SSHFS=$(type -p sshfs || true)
-    test "$ENCFS" || ENCFS=$(type -p encfs || true)
+    test "$SSH"     || SSH=$(type -p ssh || true)
+    test "$SSHFS"   || SSHFS=$(type -p sshfs || true)
+    test "$ENCFS"   || ENCFS=$(type -p encfs || true)
     test "$SSH"             || fatal ssh not found
     test "$SSHFS"           || fatal ssfs not found
     test "$ENCFS"           || fatal encfs not found
