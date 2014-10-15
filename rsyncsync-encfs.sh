@@ -52,6 +52,7 @@ check_environ() {
     test "$BACKUP_TMP" || fatal "BACKUP_TMP not defined"
     mkdir -m 0700 -p "$BACKUP_TMP" || fatal "cannot write to $BACKUP_TMP"
     set -u
+    cd $HOME
 }
 
 usage() {
