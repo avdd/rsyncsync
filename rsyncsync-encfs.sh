@@ -132,7 +132,7 @@ show_config() {
     test "${BACKUP_TARGETS:-}" || fatal "missing BACKUP_TARGETS"
     local targets=("${BACKUP_TARGETS[@]/%/\/$target}")
     echo "$source"
-    local x
+    local x=
     for x in "${targets[@]}"
     do
         echo " -> $x"
@@ -168,7 +168,7 @@ mount_history_from_config() {
 
 verify_from_config() {
     local id="${1:-}" num="${2:-}"
-    local encfs sshfs s
+    local encfs= sshfs= s=
     s=$(mount_history_from_config "$id" "$num")
     local var=BACKUP_SOURCE_$id
     local source=${!var:-}
@@ -179,14 +179,19 @@ verify_from_config() {
 
 purge_history_from_config() {
     local id="${1:-}" num="${2:-}"
-    local encfs sshfs s
-    s=$(mount_history_from_config "$id" "$num")
-    eval "$s"
+    local encfs= sshfs= s=
     local var=BACKUP_TARGET_$id
     local target=${!var:-}
     test "$target" || fatal "$var unset"
     local target="${BACKUP_TARGETS[num]}/$target"
     local keep=${BACKUP_KEEP:-100}
+    local crypt=$target
+    s=$(mount_history_from_config "$id" "$num")
+    eval "$s"
+    if [[ "$sshfs" ]]
+    then
+        crypt=$sshfs
+    fi
     purge_history
     sleep 1
     fusermount -u $encfs
@@ -195,37 +200,61 @@ purge_history_from_config() {
 
 purge_history() {
     echo purge $keep "$target" "$encfs" "$sshfs"
-    local all d crypt_d remote_d
-    local n etc
-    local host script root
 
-    all=("$encfs"/2*)
-    n=${#all[@]}
-    ((n<=keep)) && return 0
-    i=0
-    local i
-    for ((i=0; i<n; ++i))
+    local all=("$encfs"/2*)
+    local count=${#all[@]}
+    ((count<=keep)) && return 0
+    local crypt_rm=()
+    local crypt_d= clear_d= inode=
+    local error=0 i=0
+
+    for ((i=0; i<count; ++i))
     do
         clear_d=${all[i]}
-        if (( i % 2 == 1 || i > n / 2 ))
+        if (( i % 2 == 1 || i > count / 2 ))
         then
-            echo "keep ${clear_d##*/}"
-            continue
-        fi
-        echo "nuke ${clear_d##*/}"
-        inode=$(stat -c%i $clear_d)
-        crypt_d=$(find $sshfs -maxdepth 1 -type d -inum $inode)
-        root=${target##*:}
-        d="$root/$(basename $crypt_d)"
-        script="test -d '$d' && chmod -R +w $d && rm -rf -- '$d'"
-        if [[ "$target" = *:* ]]
-        then
-            host=${target%%:*}
-            ssh $host "$script"
+            echo "  ${clear_d##*/}"
         else
-            eval "$script"
+            inode=$(stat -c%i $clear_d)
+            crypt_d=$(find $crypt -maxdepth 1 -type d -inum $inode)
+            if ! test "$crypt_d"
+            then
+                echo "missing $clear_d -> $crypt_d"
+                error=1
+            else
+                echo "- ${clear_d##*/}"
+                crypt_rm+=($crypt_d)
+            fi
         fi
     done
+    if ((error))
+    then
+        echo "not proceeding due to errors"
+        return 1
+    fi
+    local host=
+    if [[ "$target" = *:* ]]
+    then
+        host=${target%%:*}
+    fi
+    local root=${target##*:}
+    local script='test -d "$d" && chmod -R +w "$d"'
+          script+=' && echo "rm $d" && rm -rf -- "$d"'
+    if [ "$host" ]
+    then
+        local sshcmd="f() { for d; do $script ; done; }; f "
+        for crypt_d in "${crypt_rm[@]}"
+        do
+            printf "'$root/$(basename $crypt_d)'\0"
+        done | xargs -r0 -s 65535 ssh $host "$sshcmd"
+    else
+        eval "f() { local d=\$1; $script; }"
+        for crypt_d in "${crypt_rm[@]}"
+        do
+            f "$root/$(basename $crypt_d)"
+        done
+    fi
+
 }
 
 try_targets() {
@@ -277,6 +306,10 @@ mount_history() {
         crypt=$(tmpdir sshfs)
         mount_sshfs "$sshcrypt" "$crypt"
         echo "sshfs='$crypt'"
+    elif [[ ! -d "$crypt" ]]
+    then
+        echo "$crypt" does not exist >&2
+        return 1
     fi
 
     mount=$(ensure_dir clear $mount)
