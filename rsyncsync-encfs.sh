@@ -11,7 +11,6 @@ DEBUG=${DEBUG:-}
 init() {
     set -eu
     shopt -s nullglob dotglob
-    init_commands
     dispatch "$@"
 }
 
@@ -21,19 +20,14 @@ dispatch() {
     then
         cmd=${1//-/_}
         shift
-        case "$COMMAND_FUNCS" in
-            *cmd_"$cmd"*)
-                cmd_$cmd "$@"
-                return 0
-                ;;
-        esac
+        if [[ $(type -t "cmd_$cmd") = function ]]
+        then
+            cmd_$cmd "$@"
+            return 0
+        fi
     fi
     usage
     exit 1
-}
-
-init_commands() {
-    COMMAND_FUNCS=$(declare -f | grep ^cmd_ | cut -d' ' -f1)
 }
 
 check_environ() {
@@ -60,7 +54,8 @@ usage() {
     echo "$0 COMMAND"
     echo
     echo COMMAND:
-    for cmd in $COMMAND_FUNCS
+    local funcs=$(declare -f | grep ^cmd_ | cut -d' ' -f1)
+    for cmd in $funcs
     do
         cmd=${cmd##cmd_}
         echo "  ${cmd//_/-}"
