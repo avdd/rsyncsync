@@ -207,6 +207,8 @@ purge_history() {
     local crypt_rm=()
     local crypt_d= clear_d= inode=
     local error=0 i=0
+    local keep_count=0
+    local purge_count=0
 
     for ((i=0; i<count; ++i))
     do
@@ -214,6 +216,7 @@ purge_history() {
         if (( i % 2 == 1 || i > count / 2 ))
         then
             echo "  ${clear_d##*/}"
+            ((++keep_count))
         else
             inode=$(stat -c%i $clear_d)
             crypt_d=$(find $crypt -maxdepth 1 -type d -inum $inode)
@@ -224,6 +227,7 @@ purge_history() {
             else
                 echo "- ${clear_d##*/}"
                 crypt_rm+=($crypt_d)
+                ((++purge_count))
             fi
         fi
     done
@@ -232,6 +236,7 @@ purge_history() {
         echo "not proceeding due to errors"
         return 1
     fi
+    echo "total: $count keep: $keep_count purge: $purge_count"
     local host=
     if [[ "$target" = *:* ]]
     then
