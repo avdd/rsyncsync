@@ -317,15 +317,19 @@ mount_history() {
     echo "encfs='$mount'"
 }
 
-do_encrypt() {
-    is_dir "${1-}" || { echo 'require existing directory' >&2; exit 1; }
-    local clear=$1 mount=${2:-}
+cmd_encrypt() {
+    local clear=${1:-} mount=${2:-}
+    clear=$(readlink -f "$clear")
+    [[ -d "$clear" ]]  || {
+        echo 'require existing directory' >&2
+        exit 1
+    }
     mount=$(ensure_dir crypt $mount)
     mount_encrypted "$clear" "$mount"
     echo "encfs='$mount'"
 }
 
-do_sshfs() {
+cmd_sshfs() {
     local sshpath=$1 mount=${2:-}
     mount=$(ensure_dir sshfs $mount)
     mount_sshfs "$sshpath" "$mount"
@@ -396,11 +400,6 @@ mount_sshfs() {
     uid=$(id -u)
     gid=$(id -g)
     $SSHFS -o uid=$uid -o gid=$gid "$sshpath" "$mount"
-}
-
-is_dir() {
-    local dir=${1:-}
-    [[ ! "$dir" || -d "$dir" ]]
 }
 
 ensure_dir() {
