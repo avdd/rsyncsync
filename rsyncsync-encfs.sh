@@ -280,14 +280,9 @@ try_targets() {
                 errors+=("skipping '$target'")
             continue
         fi
-        if [ "$DEBUG" ]
-        then
-            sync_one "$source" "$target" && return 0
-        else
-            output=$(sync_one "$source" "$target" 2>&1)
-            [ $? -eq 0 ] && return 0
-            errors+=("$output")
-        fi
+        sync_one "$source" "$target"
+        [ $? -eq 0 ] && return 0
+        errors+=("$output")
     done
     stderr no targets succeeded
     if [ -z "$DEBUG" ]
